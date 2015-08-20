@@ -3,5 +3,9 @@
 import Cocoa
 import Foundation
 
+var string = "Morten Just's iPhone"
 
-939393
+var total = 0
+
+abs((string as NSString).hash)
+

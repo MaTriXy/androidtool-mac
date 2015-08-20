@@ -13,16 +13,21 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     @IBOutlet weak var window: NSWindow!
     @IBOutlet weak var scriptsMenu: NSMenu!
+    var preferencesWindowController: PreferencesWindowController!
     
     var masterViewController: MasterViewController!
 
     func applicationDidFinishLaunching(aNotification: NSNotification) {
         checkForUpdate()
         updateScriptFilesInMenu()
-        window.movableByWindowBackground = true
-        window.titleVisibility = NSWindowTitleVisibility.Hidden
-        window.titlebarAppearsTransparent = true;
-        window.styleMask |= NSFullSizeContentViewWindowMask;
+        checkForPreferences()
+        
+        if !Util().isMavericks() {        
+            window.movableByWindowBackground = true
+            window.titleVisibility = NSWindowTitleVisibility.Hidden
+            window.titlebarAppearsTransparent = true;
+            window.styleMask |= NSFullSizeContentViewWindowMask;
+            }
         
         masterViewController = MasterViewController(nibName: "MasterViewController", bundle: nil)
         masterViewController.window = window
@@ -48,6 +53,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             views: viewDict)
         containerView.addConstraints(viewConstraintH)
         containerView.addConstraints(viewConstraintV)
+        
+        
     }
 
     func application(sender: NSApplication, openFile filename: String) -> Bool {
@@ -58,8 +65,30 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     
     @IBAction func revealFolderClicked(sender: NSMenuItem) {
         Util().revealScriptsFolder()
+    
     }
 
+    
+    func checkForPreferences(){
+        var ud = NSUserDefaults.standardUserDefaults()
+        
+        let bitratePref = ud.doubleForKey("bitratePref")
+        let scalePref = ud.doubleForKey("scalePref")
+
+        println("bit: \(bitratePref)")
+        
+        
+        if bitratePref == 0.0 {
+            ud.setDouble(Double(3025000), forKey: "bitratePref")
+        }
+        
+        if scalePref == 0.0 {
+            ud.setDouble(1, forKey: "scalePref")
+        }
+    
+    }
+    
+    
     // populate nsmenu with all scripts
     // run this script on all devices
     
@@ -97,14 +126,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func runScript(sender:NSMenuItem){
         Util().stopRefreshingDeviceList()
         let scriptPath = "\(Util().getSupportFolderScriptPath())/\(sender.title).sh"
-        println("ready to run \(scriptPath) on all devices")
+        println("ready to run \(scriptPath) on all Android devices")
         
         let deviceVCs = masterViewController.deviceVCs
         for deviceVC in deviceVCs {
-            let serial = deviceVC.device.serial!
-            deviceVC.startProgressIndication()
-            ShellTasker(scriptFile: scriptPath).run(arguments: serial, isUserScript: true) { (output) -> Void in
-                    deviceVC.stopProgressIndication()
+            if deviceVC.device.deviceOS == DeviceOS.Android {
+                let serial = deviceVC.device.serial!
+                deviceVC.startProgressIndication()
+                ShellTasker(scriptFile: scriptPath).run(arguments: ["\(serial)"], isUserScript: true) { (output) -> Void in
+                        deviceVC.stopProgressIndication()
+                }
             }
         }
         
@@ -123,7 +154,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func checkForUpdate(){
         dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_BACKGROUND, 0)) {
             let url = NSURL(string: "http://mortenjust.com/androidtool/latestversion")
-            let version = NSString(contentsOfURL: url!, encoding: NSUTF8StringEncoding, error: nil)!
+            if let version = NSString(contentsOfURL: url!, encoding: NSUTF8StringEncoding, error: nil) {
             
             var nsu = NSUserDefaults.standardUserDefaults()
             let knowsAboutNewVersion = nsu.boolForKey("UserKnowsAboutNewVersion")
@@ -131,24 +162,44 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             dispatch_async(dispatch_get_main_queue()) {
                 let currentVersion = NSBundle.mainBundle().objectForInfoDictionaryKey("CFBundleShortVersionString") as! String
                 if (currentVersion != version) && !knowsAboutNewVersion {
-                    var alert = NSAlert()
-                    alert.messageText = "An update is available! Go to mortenjust.com/androidtool to download"
-                    alert.runModal()
+//                    var alert = NSAlert()
+//                    alert.messageText = "An update is available! Go to mortenjust.com/androidtool to download"
+//                    alert.runModal()
                     nsu.setObject(true, forKey: "UserKnowsAboutNewVersion")
                     }
+                }
             }
         }
     }
     
     
     func applicationWillResignActive(notification: NSNotification) {
-        Util().stopRefreshingDeviceList()
+        masterViewController.discoverer.updateInterval = 120
+    }
+    
+    @IBAction func refreshDeviceListClicked(sender: NSMenuItem) {
+        masterViewController.discoverer.pollDevices()
+    }
+
+    @IBAction func showLogFileClicked(sender: NSMenuItem) {
+        
+    }
+    
+    @IBAction func preferencesClicked(sender: NSMenuItem) {
+        println("pref")
+        preferencesWindowController = PreferencesWindowController(windowNibName: "PreferencesWindowController")
+        preferencesWindowController.showWindow(sender)
+
     }
 
     
+    
     func applicationDidBecomeActive(notification: NSNotification) {
-        Util().restartRefreshingDeviceList()
+//        Util().restartRefreshingDeviceList()
+        masterViewController.discoverer.updateInterval = 3
         updateScriptFilesInMenu()
+        masterViewController.discoverer.pollDevices()
+        
     }
     
     func applicationWillTerminate(aNotification: NSNotification) {

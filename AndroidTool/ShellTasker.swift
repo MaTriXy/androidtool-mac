@@ -29,7 +29,7 @@ class ShellTasker: NSObject {
         task.terminate()
     }
     
-    func run(arguments args:String="", isUserScript:Bool = false, complete:(output:NSString)-> Void) {
+    func run(arguments args:[String]=[], isUserScript:Bool = false, isIOS:Bool = false, complete:(output:NSString)-> Void) {
         
         var output = NSString()
         var data = NSData()
@@ -58,10 +58,29 @@ class ShellTasker: NSObject {
         let pipe = NSPipe()
 
         task.launchPath = bash
-        task.arguments = [scriptPath, resourcesPath!, args]
+        
+        var allArguments = [String]()
+        allArguments.append("\(scriptPath)") // $1
+
+        if !isIOS {
+            allArguments.append(resourcesPath!) // $1
+            } else
+            {
+            let imobilePath = NSBundle.mainBundle().pathForResource("idevicescreenshot", ofType: "")?.stringByDeletingLastPathComponent
+            allArguments.append(imobilePath!) // $1
+            }
+        
+        for arg in args {
+           allArguments.append(arg)
+        }
+        
+        task.arguments = allArguments
+        
+//  was      task.arguments = [scriptPath, resourcesPath!, args]
+
         task.standardOutput = pipe
         
-        
+
         self.task.launch()
         pipe.fileHandleForReading.waitForDataInBackgroundAndNotify()
         
