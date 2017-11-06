@@ -24,15 +24,6 @@ class Util {
         view.frame.origin.y -= addHeight
     }
     
-//    func changeWindowHeight(window:NSWindow, view:NSView, newHeight:CGFloat=0) {
-//        var frame = window.frame
-//        frame.size = CGSizeMake(frame.size.width, newHeight)
-////        frame.origin.y -= newHeight
-//        window.setFrame(frame, display: true, animate: true)
-//        view.frame.size.height += newHeight
-//        view.frame.origin.y -= newHeight
-//    }
-    
     
     func changeWindowHeight(window:NSWindow, view:NSView, newHeight:CGFloat=0) {
         var frame = window.frame
@@ -45,9 +36,9 @@ class Util {
 
     
     func showNotification(title:String, moreInfo:String, sound:Bool=true) -> Void {
-        var unc = NSUserNotificationCenter.defaultUserNotificationCenter()
+        let unc = NSUserNotificationCenter.defaultUserNotificationCenter()
         
-        var notification = NSUserNotification()
+        let notification = NSUserNotification()
         notification.title = title
         notification.informativeText = moreInfo
         if sound == true {
@@ -61,18 +52,27 @@ class Util {
         
         let fileM = NSFileManager.defaultManager()
         
-        let supportFolder:String = NSSearchPathForDirectoriesInDomains(NSSearchPathDirectory.ApplicationSupportDirectory, NSSearchPathDomainMask.UserDomainMask, true)[0] as! String
+        let supportFolder:String = NSSearchPathForDirectoriesInDomains(NSSearchPathDirectory.ApplicationSupportDirectory, NSSearchPathDomainMask.UserDomainMask, true)[0] 
         
         let folder = "\(supportFolder)/AndroidTool"
         let scriptFolder = "\(folder)/UserScripts"
         
         if !fileM.fileExistsAtPath(folder) {
-            fileM.createDirectoryAtPath(folder, withIntermediateDirectories: false, attributes: nil, error: nil)
-            fileM.createDirectoryAtPath(scriptFolder, withIntermediateDirectories: false, attributes: nil, error: nil)
+            do {
+                try fileM.createDirectoryAtPath(folder, withIntermediateDirectories: false, attributes: nil)
+            } catch _ {
+            }
+            do {
+                try fileM.createDirectoryAtPath(scriptFolder, withIntermediateDirectories: false, attributes: nil)
+            } catch _ {
+            }
             
             // copy files from UserScriptsInception to this new folder - TODO: Take all, not just bugreport
             let inceptionScript = NSBundle.mainBundle().pathForResource("Take Bugreport", ofType: "sh")
-            fileM.copyItemAtPath(inceptionScript!, toPath: "\(scriptFolder)/Take Bugreport.sh", error: nil)
+            do {
+                try fileM.copyItemAtPath(inceptionScript!, toPath: "\(scriptFolder)/Take Bugreport.sh")
+            } catch _ {
+            }
         }
         return scriptFolder
     }
@@ -83,7 +83,7 @@ class Util {
         }
     
     func getFilesInScriptFolder(folder:String) -> [String]? {
-        var fileM = NSFileManager.defaultManager()
+        let fileM = NSFileManager.defaultManager()
         var files = [String]()
         let someFiles = fileM.enumeratorAtPath(folder)
         while let file = someFiles?.nextObject() as? String  {
@@ -95,7 +95,12 @@ class Util {
     }
     
     func isMavericks() -> Bool {
-        return NSProcessInfo.processInfo().operatingSystemVersion.minorVersion != 10 ? true : false
+        if #available(OSX 10.10, *) {
+            return NSProcessInfo.processInfo().operatingSystemVersion.minorVersion != 10 ? true : false
+        } else {
+            // Fallback on earlier versions
+            return false
+        }
     }
     
     
@@ -106,7 +111,113 @@ class Util {
     func stopRefreshingDeviceList(){
         NSNotificationCenter.defaultCenter().postNotificationName("suspendAdb", object: self, userInfo:nil)
     }
+    
+    func findMatchesInString(rawdata:String, regex:String) -> [String]? {
+        do {
+            let re = try NSRegularExpression(pattern: regex,
+                options: NSRegularExpressionOptions.CaseInsensitive)
+            
+            let matches = re.matchesInString(rawdata,
+                options: NSMatchingOptions.ReportProgress,
+                range:
+                NSRange(location: 0, length: rawdata.utf16.count))
+            
+            if matches.count != 0 {
+                var results = [String]()
+                for match in matches {
+                    let result = (rawdata as NSString).substringWithRange(match.rangeAtIndex(1))
+                    results.append(result)
+                }
+                return results
+            }
+            else {
+                return nil
+            }
+            
+        } catch {
+            print("Problem!")
+            return nil
+        }
+    }
+    
+    
+    
+    func fadeViewTo(alphaValue:Float, view:NSView, delay:CFTimeInterval=0){
+        view.wantsLayer = true
 
+        let fade = CABasicAnimation(keyPath: "opacity")
+        fade.duration = 0.3
+        fade.beginTime = CACurrentMediaTime() + delay
+        fade.toValue = alphaValue
+        fade.timingFunction = CAMediaTimingFunction(name: kCAMediaTimingFunctionEaseOut)
+
+        
+        let move = CABasicAnimation(keyPath: "position.y")
+        if alphaValue == 0 {
+            move.toValue = view.frame.origin.y-10
+        } else {
+            move.toValue = view.frame.origin.y
+        }
+        move.duration = fade.duration
+        move.beginTime = fade.beginTime
+        move.timingFunction = fade.timingFunction
+        
+        
+        CATransaction.begin()
+        view.layer?.addAnimation(fade, forKey: "fader")
+        view.layer?.addAnimation(move, forKey: "mover")
+        CATransaction.commit()
+        
+        view.layer?.position.y = move.toValue as! CGFloat
+        view.layer?.opacity = alphaValue
+        
+        
+    }
+    
+    
+    func fadeViewOut(view:NSView){
+        fadeViewTo(0, view: view)
+    }
+    
+    func fadeViewIn(view:NSView){
+        fadeViewTo(1, view: view)
+    }
+    
+    
+    func getStaggerDelay()->CFTimeInterval{ return 2}
+    
+    func fadeViewsInStaggered(views:[NSView]){
+        var delay:CFTimeInterval = 0
+        for view in views {
+            fadeViewTo(1, view: view, delay: delay)
+            delay += getStaggerDelay()
+        }
+    }
+    
+    func fadeViewsOutStaggered(views:[NSView]){
+        var delay:CFTimeInterval = 0
+        for view in views {
+            fadeViewTo(0, view: view, delay: delay)
+            delay += getStaggerDelay()
+        }
+    }
+
+    static func formatBytes(byteCount:UInt64) -> String {
+        let formatter = NSByteCountFormatter()
+        let formatted = formatter.stringFromByteCount(Int64(byteCount))
+        return formatted
+    }
+    
+    static func getFileSizeForFilePath(filePath:String) -> UInt64 {
+        
+        do {
+            let atts:NSDictionary = try NSFileManager.defaultManager().attributesOfItemAtPath(filePath)
+            return atts.fileSize()
+        } catch _ {
+        }
+        
+        return 1
+    }
 }
 
 

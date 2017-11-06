@@ -9,23 +9,30 @@
 import Cocoa
 import AVFoundation
 
-class DeviceViewController: NSViewController, NSPopoverDelegate, UserScriptDelegate, IOSRecorderDelegate {
+class DeviceViewController: NSViewController, NSPopoverDelegate, UserScriptDelegate, IOSRecorderDelegate, DropDelegate, ApkHandlerDelegate, ZipHandlerDelegate, ObbHandlerDelegate {
     var device : Device!
     @IBOutlet weak var deviceNameField: NSTextField!
     @IBOutlet  var cameraButton: NSButton!
     @IBOutlet weak var deviceImage: NSImageView!
     @IBOutlet weak var progressBar: NSProgressIndicator!
-    @IBOutlet weak var videoButton: NSButton!
-    @IBOutlet weak var moreButton: NSButton!
-    
+    @IBOutlet weak var videoButton: MovableButton!
+    @IBOutlet weak var moreButton: MovableButton!
+    @IBOutlet weak var loaderButton: LoaderView!
+    @IBOutlet weak var statusLabel: StatusTextField!
     var restingButton : NSImage!
-    
-    
     @IBOutlet var scriptsPopover: NSPopover!
-    
     @IBOutlet var previewPopover: NSPopover!
-    
     @IBOutlet var previewView: NSView!
+    @IBOutlet weak var uninstallButton: MovableButton!
+    
+    
+    // install invite
+    
+    @IBOutlet var installInviteView: NSView!
+    @IBOutlet weak var inviteAppName: NSTextField!
+    @IBOutlet weak var inviteVersions: NSTextField!
+    @IBOutlet weak var invitePackageName: NSTextField!
+    @IBOutlet weak var inviteIcon: NSImageView!
     
     
     var iosHelper : IOSDeviceHelper!
@@ -33,27 +40,126 @@ class DeviceViewController: NSViewController, NSPopoverDelegate, UserScriptDeleg
     var isRecording = false
     var moreOpen = false
     var moreShouldClose = false
+    var uiTweaker : UITweaker!
+    var dropView : DropReceiverView!
+    var apkToUninstall : Apk!
+    
+    func shouldChangeStatusBar() -> Bool {
+        if device.type == .Watch {
+            return false
+        }
+        
+        return NSUserDefaults.standardUserDefaults().boolForKey("changeAndroidStatusBar")
+    }
+    
+    func setStatus(text:String, shouldFadeOut:Bool = true){
+        statusLabel.setText(text, shouldFadeOut: shouldFadeOut)
+    }
+    
+    
+    func maybeChangeStatusBar(should:Bool, completion:()->Void){
+        if should {
+            setStatus("Changing status bar")
+            uiTweaker.start({ () -> Void in
+                completion()
+            })
+        } else {
+            completion()
+        }
+    }
+    
+    func maybeUseActivityFilename(should:Bool, completion:()->Void){
+        if should{
+            setStatus("Using activity as filename")
+            device.getCurrentActivity({ (activityName) -> Void in
+                completion()
+            })
+        } else {
+            completion()
+        }
+        
+    }
+    
     
     func takeScreenshot(){
+        setStatus("Taking screenshot...")
         self.startProgressIndication()
-        
         if device.deviceOS == DeviceOS.Android {
-        
-            ShellTasker(scriptFile: "takeScreenshotOfDeviceWithSerial").run(arguments: [device.serial!]) { (output) -> Void in
-                self.stopProgressIndication()
-                Util().showNotification("Screenshot ready", moreInfo: "", sound: true)
-            }
+            maybeChangeStatusBar(self.shouldChangeStatusBar(), completion: { () -> Void in
+                self.maybeUseActivityFilename(self.shouldUseActivityInFilename(), completion: { () -> Void in
+                    self.takeAndroidScreenshot()
+                })
+            })
         }
-            
         if device.deviceOS == DeviceOS.Ios {
-            println("IOS screenshot")
-            
-            
-            ShellTasker(scriptFile: "takeScreenshotOfDeviceWithUUID").run(arguments: [device.uuid!], isUserScript: false, isIOS: true, complete: { (output) -> Void in
+            print("IOS screenshot")
+            let args = [device.uuid!, getFolderForScreenshots()]
+            ShellTasker(scriptFile: "takeScreenshotOfDeviceWithUUID").run(arguments: args, isUserScript: false, isIOS: true, complete: { (output) -> Void in
+                self.setStatus("Screenshot ready")
                 self.stopProgressIndication()
                 Util().showNotification("Screenshot ready", moreInfo: "", sound: true)
+                self.setStatus("Screenshot ready")
             })
             
+        }
+    }
+    
+    func getFolderForScreenshots() -> String {
+        return NSUserDefaults.standardUserDefaults().stringForKey(C.PREF_SCREENSHOTFOLDER)!
+    }
+    
+    func getFolderForScreenRecordings() -> String {
+        return NSUserDefaults.standardUserDefaults().stringForKey(C.PREF_SCREENRECORDINGSFOLDER)!
+    }
+    
+    func cleanActivityName(a:String) -> String {
+//        let trimmed = a.stringByTrimmingCharactersInSet(NSCharacterSet.whitespaceAndNewlineCharacterSet()).stringByTrimmingCharactersInSet(NSCharacterSet.URLPathAllowedCharacterSet())
+        
+        var trimmed = a.stringByTrimmingCharactersInSet(NSCharacterSet.whitespaceAndNewlineCharacterSet())
+        trimmed = trimmed.stringByReplacingOccurrencesOfString("/", withString: "")
+        
+        
+        let components = trimmed.componentsSeparatedByString(".")
+        
+        var cleanName=""
+        if components.count > 1 {
+            cleanName = "\(components[components.count-2])-\(components[components.count-1])"
+            }
+        return cleanName
+    }
+    
+    func shouldUseActivityInFilename() -> Bool {
+        let should = NSUserDefaults.standardUserDefaults().boolForKey(C.PREF_USEACTIVITYINFILENAME)
+        if !should {
+            device.currentActivity = ""
+        }
+        return should
+    }
+    
+    func takeAndroidScreenshot(){
+        setStatus("Taking screenshot")
+        let activity = self.cleanActivityName(device.currentActivity)
+        
+        let args = [self.device.adbIdentifier!,
+                    getFolderForScreenshots(),
+                    activity
+        ]
+        
+        ShellTasker(scriptFile: "takeScreenshotOfDeviceWithSerial").run(arguments: args) { (output) -> Void in
+            Util().showNotification("Screenshot ready", moreInfo: "", sound: true)
+            self.exitDemoModeIfNeeded()
+            self.stopProgressIndication()
+            self.setStatus("Screenshot ready")
+        }
+    }
+    
+    
+    func exitDemoModeIfNeeded(){
+        if self.shouldChangeStatusBar() {
+            self.setStatus("Changing status bar back to normal")
+            ShellTasker(scriptFile: "exitDemoMode").run(arguments: [self.device.adbIdentifier!], isUserScript: false, isIOS: false, complete: { (output) -> Void in
+                // done, back to normal
+            })
         }
     }
     
@@ -62,17 +168,19 @@ class DeviceViewController: NSViewController, NSPopoverDelegate, UserScriptDeleg
     }
 
     func userScriptEnded() {
+        setStatus("Script finished")
         stopProgressIndication()
         Util().restartRefreshingDeviceList()
     }
     
     func userScriptStarted() {
+        setStatus("Script running")
         startProgressIndication()
         Util().stopRefreshingDeviceList()
     }
     
     func userScriptWantsSerial() -> String {
-        return device.serial!
+        return device.adbIdentifier!
     }
     
     func popoverDidClose(notification: NSNotification) {
@@ -84,7 +192,7 @@ class DeviceViewController: NSViewController, NSPopoverDelegate, UserScriptDeleg
         Util().stopRefreshingDeviceList()
         if !moreOpen{
             moreOpen = true
-            scriptsPopover.showRelativeToRect(sender.bounds, ofView: sender, preferredEdge: 2)
+            scriptsPopover.showRelativeToRect(sender.bounds, ofView: sender, preferredEdge: NSRectEdge(rawValue: 2)!)
             }
     }
     
@@ -98,7 +206,7 @@ class DeviceViewController: NSViewController, NSPopoverDelegate, UserScriptDeleg
     
     
     func iosRecorderFailed(title: String, message: String?) {
-        var alert = NSAlert()
+        let alert = NSAlert()
         alert.messageText = title
         alert.runModal()
      
@@ -110,28 +218,41 @@ class DeviceViewController: NSViewController, NSPopoverDelegate, UserScriptDeleg
     
     func iosRecorderDidEndPreparing() {
         videoButton.alphaValue = 1
-        println("recorder did end preparing")
+        print("recorder did end preparing")
         self.videoButton.image = NSImage(named: "stopButton")
         self.videoButton.enabled = true
     }
     
     func iosRecorderDidStartPreparing(device: AVCaptureDevice) {
-        println("recorder did start preparing")
+        print("recorder did start preparing")
     }
     
     func startRecording(){
+        setStatus("Starting screen recording")
         Util().stopRefreshingDeviceList()
         isRecording = true
-        self.restingButton = self.videoButton.image
+        self.restingButton = self.videoButton.image // restingbutton is "recordButtonWhite"
+        videoButton.image = NSImage(named: "stopButton")
+        videoButton.enabled = false
         cameraButton.enabled = false
         moreButton.enabled = false
 
 
         switch device.deviceOS! {
         case .Android:
-            startRecordingOnAndroidDevice(restingButton!)
+            if shouldChangeStatusBar() {
+                setStatus("Changing status bar")
+                uiTweaker.start({ () -> Void in
+                    self.videoButton.enabled = true
+                    self.startRecordingOnAndroidDevice(self.restingButton!)
+                })
+            } else {
+                self.videoButton.enabled = true
+                startRecordingOnAndroidDevice(restingButton!)
+            }
         case .Ios:
             // iOS starts recording 1 second delayed, so delaying the STOP button to signal this to the user
+            videoButton.enabled = true
             openPreviewPopover()
             videoButton.alphaValue = 0.5
             startRecordingOnIOSDevice()
@@ -145,8 +266,8 @@ class DeviceViewController: NSViewController, NSPopoverDelegate, UserScriptDeleg
     func startRecordingOnAndroidDevice(restingButton:NSImage){
         shellTasker = ShellTasker(scriptFile: "startRecordingForSerial")
         
-        var scalePref = NSUserDefaults.standardUserDefaults().doubleForKey("scalePref")
-        var bitratePref = Int(NSUserDefaults.standardUserDefaults().doubleForKey("bitratePref"))
+        let scalePref = NSUserDefaults.standardUserDefaults().doubleForKey("scalePref")
+        let bitratePref = Int(NSUserDefaults.standardUserDefaults().doubleForKey("bitratePref"))
         
         // get phone's resolution, multiply with user preference for screencap size (either 1 or lower)
         var res = device.resolution!
@@ -155,23 +276,35 @@ class DeviceViewController: NSViewController, NSPopoverDelegate, UserScriptDeleg
             res = (device.resolution!.width*scalePref, device.resolution!.height*scalePref)
         }
         
-        let args:[String] = [device.serial!, "\(Int(res.width))", "\(Int(res.height))", "\(bitratePref)"]
+        let args:[String] = [device.adbIdentifier!,
+                            "\(Int(res.width))",
+                            "\(Int(res.height))",
+                            "\(bitratePref)",
+                            getFolderForScreenRecordings(),
+                            "\(NSUserDefaults.standardUserDefaults().boolForKey(C.PREF_GENERATEGIF))"
+                            ]
+        
+        setStatus("Recording screen")
+        
         
         shellTasker.run(arguments: args) { (output) -> Void in
-            
-            println("-----")
-            println(output)
-            println("-----")
+            self.setStatus("Fetching screen recording")
+            print("-----")
+            print(output)
+            print("-----")
             
             self.startProgressIndication()
             self.cameraButton.enabled = true
             self.moreButton.enabled = true
             self.videoButton.image = restingButton
-            var postProcessTask = ShellTasker(scriptFile: "postProcessMovieForSerial")
-            let postArgs = ["\(self.device.serial!)", "\(Int(res.width))", "\(Int(res.height))"]
+            let postProcessTask = ShellTasker(scriptFile: "postProcessMovieForSerial")
+
             postProcessTask.run(arguments: args, complete: { (output) -> Void in
                 Util().showNotification("Your recording is ready", moreInfo: "", sound: true)
+                self.exitDemoModeIfNeeded()
+                self.setStatus("Recording finished")
                 self.stopProgressIndication()
+
             })
         }
     
@@ -185,12 +318,16 @@ class DeviceViewController: NSViewController, NSPopoverDelegate, UserScriptDeleg
         cameraButton.enabled = true
         
         let movPath = outputFileURL.path!
-        let gifPath = "\(outputFileURL.path!.stringByDeletingPathExtension).gif"
+        let gifUrl = outputFileURL.URLByDeletingPathExtension!
+        let gifPath = "\(gifUrl.path!).gif"
         let ffmpegPath = NSBundle.mainBundle().pathForResource("ffmpeg", ofType: "")!
         let scalePref = NSUserDefaults.standardUserDefaults().doubleForKey("scalePref")
+        let args = [ffmpegPath, movPath, gifPath, "\(scalePref)", getFolderForScreenRecordings()]
         
-        ShellTasker(scriptFile: "convertMovieFiletoGif").run(arguments: [ffmpegPath, movPath, gifPath, "\(scalePref)"], isUserScript: false, isIOS: false) { (output) -> Void in
-            println("done converting to gif")
+        
+        
+        ShellTasker(scriptFile: "convertMovieFiletoGif").run(arguments: args, isUserScript: false, isIOS: false) { (output) -> Void in
+            print("done converting to gif")
             self.stopProgressIndication()
         }
         
@@ -236,27 +373,50 @@ class DeviceViewController: NSViewController, NSPopoverDelegate, UserScriptDeleg
     }
 
     func setup(){
-//        println("setting up view for \(device.name!)")        
+        if device.deviceOS == .Android {
+            uiTweaker = UITweaker(adbIdentifier: device.adbIdentifier!)
+            }
+      dropView = self.view as! DropReceiverView
+      dropView.delegate = self
+        
+    
+//        let apk = Apk(rawAaptBadgingData: "hej")
+//        showUninstallButton(apk)
+        
     }
     
     func startProgressIndication(){
-        progressBar.usesThreadedAnimation = true
-        progressBar.startAnimation(nil)
+        Util().stopRefreshingDeviceList()
+        dispatch_after(1, dispatch_get_main_queue()) { () -> Void in
+            self.loaderButton.startRotating()
+        }
     }
     
     func stopProgressIndication(){
-        progressBar.stopAnimation(nil)
+        Util().restartRefreshingDeviceList()
+//        progressBar.stopAnimation(nil)
+        loaderButton.stopRotatingAndReset()
     }
     
     override func awakeFromNib() {
-        deviceNameField.stringValue = device.model!
+        if let model = device.model {
+            deviceNameField.stringValue = model
+            }
         let brandName = device.brand!.lowercaseString
-        deviceImage.image = NSImage(named: "logo\(brandName)")
+        let imageName = "logo\(brandName)"
+        print("imageName: \(imageName)")
+        var image = NSImage(named: imageName)
+        
+        if image == nil {
+            image = NSImage(named: "androidlogo")
+        }
+        deviceImage.image = image
         
         if device.isEmulator {
-            cameraButton.enabled = false
+//            cameraButton.enabled = false
             videoButton.enabled = false
             deviceNameField.stringValue = "Emulator"
+            
         }
         
         // only enable video recording if we have resolution, which is a bit slow because it comes from a big call
@@ -272,10 +432,10 @@ class DeviceViewController: NSViewController, NSPopoverDelegate, UserScriptDeleg
     
     func startWaitingForAndroidVideoReady(){
         if device.resolution != nil {
-            println("not nil")
+            print("resolution not nil")
             videoButton.enabled = true
         } else {
-            println("is nil")
+            print("resolution is nil")
             NSTimer.scheduledTimerWithTimeInterval(1, target: self, selector: "enableVideoButtonWhenReady", userInfo: nil, repeats: false)
         }
     }
@@ -286,13 +446,291 @@ class DeviceViewController: NSViewController, NSPopoverDelegate, UserScriptDeleg
             startWaitingForAndroidVideoReady()
         case .Ios:
             // videoButton.hidden = false
-            println("showing video button for iOS")
+            print("showing video button for iOS")
             videoButton.enabled = true
         }
     }
 
     override func viewDidLoad() {
-        super.viewDidLoad()
-        // Do view setup here.
+        if #available(OSX 10.10, *) {
+            super.viewDidLoad()
+        } else {
+            // Fallback on earlier versions
+        }
+        setStatus("")
     }
+    
+    
+    func hideButtons(){
+        Util().fadeViewsOutStaggered([moreButton, cameraButton, videoButton])
+        uninstallButton.alphaValue = 0
+    }
+    
+    
+    func showButtons(){
+        Util().fadeViewsInStaggered([moreButton, cameraButton, videoButton])
+        uninstallButton.alphaValue = 1
+    }
+    
+    
+    func transitionInstallInvite(moveIn:Bool=true, completion:()->Void){
+        let move = CABasicAnimation(keyPath: "position.y")
+        move.duration = 0.3
+        
+        if moveIn {
+            move.toValue = 30
+            move.fromValue = 20
+        } else {
+            move.toValue = 20
+            move.fromValue = 30
+        }
+            
+        move.timingFunction = CAMediaTimingFunction(name: kCAMediaTimingFunctionEaseOut)
+        installInviteView.wantsLayer = true
+        let fade = CABasicAnimation(keyPath: "opacity")
+        fade.duration = 0.3
+        
+        if moveIn {
+            fade.toValue = 1
+            fade.fromValue = 0
+        } else {
+            fade.toValue = 0
+            fade.fromValue = 1
+        }
+        
+        fade.timingFunction = CAMediaTimingFunction(name: kCAMediaTimingFunctionEaseOut)
+        
+        CATransaction.begin()
+        CATransaction.setCompletionBlock { () -> Void in
+            completion()
+        }
+        installInviteView.layer?.addAnimation(fade, forKey: "fader")
+        installInviteView.layer?.addAnimation(move, forKey: "mover")
+        CATransaction.commit()
+    }
+    
+    
+    func showInstallInvite(forApk apk:Apk){
+        installInviteView.frame.origin = NSMakePoint(120, 30)
+        view.addSubview(installInviteView)
+        
+        transitionInstallInvite(true) { () -> Void in }
+        
+        inviteAppName.stringValue = apk.appName
+        if let versionName = apk.versionName {
+            inviteVersions.stringValue = versionName
+        }
+
+        if let versionCode = apk.versionCode {
+            inviteVersions.stringValue = "\(inviteVersions.stringValue) (\(versionCode))"
+        }
+        
+        if let packageName = apk.packageName {
+            invitePackageName.stringValue = packageName
+        }
+        
+        if let localIcon = apk.localIconPath {
+            print("icon is: \(localIcon)")
+            let i = NSImage(byReferencingFile: localIcon)
+            inviteIcon.image = i
+        }
+        
+    }
+    
+    func hideInstallInviteView(){
+        transitionInstallInvite(false) { () -> Void in
+            self.installInviteView.removeFromSuperview()
+        }
+
+    }
+    
+    func dropDragEntered(filePath: String) {
+        print("vc:dropDragEntered")
+
+        if let fileExt = NSURL(fileURLWithPath: filePath).pathExtension {
+            switch fileExt {
+                case "apk":
+                    hideButtons()
+                    let a = ApkHandler(filepath: filePath, device: self.device)
+                    a.getInfoFromApk { (apk) -> Void in
+                        self.setStatus("Drop to install")
+                        self.showInstallInvite(forApk: apk)
+                }
+                case "zip":
+                    if NSUserDefaults.standardUserDefaults().boolForKey(C.PREF_FLASHIMAGESINZIPFILES){
+                        setStatus("Drop to flash image with Fastboot")
+                    } else {
+                        setStatus("Enable flashing in Prefs first")
+                }
+                case "obb":
+                    setStatus("Drop to copy OBB")
+            default:
+                setStatus("Whaaaaat, what is this file?")
+            }
+        }
+    }
+    
+    func dropDragExited() {
+        print("vc:dropDragExited")
+        stopProgressIndication()
+        hideInstallInviteView()
+        showButtons()
+        setStatus(" ")
+    }
+    
+    func dropDragPerformed(filePath: String) {
+        if device.deviceOS != .Android {return}
+        startProgressIndication()
+
+        print("vc:dropDragPerformed")
+        
+        if let fileExt = NSURL(fileURLWithPath: filePath).pathExtension {
+            switch fileExt {
+                case "apk":
+                    installApk(filePath)
+                    hideInstallInviteView()
+                    showButtons()
+                case "zip":
+                    if NSUserDefaults.standardUserDefaults().boolForKey(C.PREF_FLASHIMAGESINZIPFILES){
+                        flashZip(filePath)
+                    } else {
+                        stopProgressIndication()
+                        self.setStatus("Enable flashing in Prefs")
+                }
+                case "obb":
+                    installObb(filePath)
+                default:
+                stopProgressIndication()
+                setStatus("Wait, what?")
+            }
+        }
+    }
+    
+
+    
+    func dropUpdated(mouseAt: NSPoint) {
+        // print("vc:dropUpdated")
+    }
+    
+    func installObb(filePath:String){
+        print("installObb")
+        startProgressIndication()
+        let obbHandler = ObbHandler(filePath: filePath, device: self.device)
+        obbHandler.delegate = self
+        obbHandler.pushToDevice()
+    }
+    
+    func obbHandlerDidFinish() {
+        setStatus("Finished copying OBB file")
+        stopProgressIndication()
+    }
+
+    
+    func obbHandlerDidStart(bytes:String) {
+        setStatus("Copying \(bytes) OBB file", shouldFadeOut: false)
+        startProgressIndication()
+    }
+
+    
+    func flashZip(filePath:String){
+        print("flashZip")
+        startProgressIndication()
+        let handler = ZipHandler(filepath: filePath, device: self.device)
+        handler.delegate = self
+        handler.flash()
+    }
+    
+    func zipHandlerDidFinish() {
+        setStatus("Finished flashing image")
+        stopProgressIndication()
+    }
+    
+    func zipHandlerDidStart() {
+        setStatus("Flashing image")
+        startProgressIndication()
+    }
+    
+    
+    func installApk(apkPath:String){
+        let apkHandler = ApkHandler(filepath: apkPath, device: self.device)
+        apkHandler.delegate = self
+        
+        var apk:Apk!
+        apkHandler.getInfoFromApk { (apkInfo) -> Void in
+            apk = apkInfo
+        }
+        
+        self.startProgressIndication()
+        
+        if NSUserDefaults.standardUserDefaults().boolForKey(C.PREF_LAUNCHINSTALLEDAPP) {
+            apkHandler.installAndLaunch({ () -> Void in
+               print("installed and launched")
+               self.stopProgressIndication()
+               self.showUninstallButton(apk)
+            })
+        } else {
+            apkHandler.install({ () -> Void in
+                print("installed but not launched")
+                self.stopProgressIndication()
+                self.showUninstallButton(apk)
+            })
+        }
+    }
+    
+    func showUninstallButton(apk:Apk){
+        
+        uninstallButton.title = "Uninstall \(apk.appName)"
+        apkToUninstall = apk
+        uninstallButton.hidden = false
+        uninstallButton.fadeIn()
+        uninstallButton.moveUpForUninstallButton(0.5)
+        moreButton.moveUpForUninstallButton(0.6)
+        videoButton.moveUpForUninstallButton(0.6)
+    }
+    
+    func hideUninstallButton(){
+        uninstallButton.fadeOut({ () -> Void in })
+        uninstallButton.moveDownForUninstallButton(0.5)
+        moreButton.moveDownForUninstallButton(0.6)
+        videoButton.moveDownForUninstallButton(0.6)
+    }
+    
+    @IBAction func uninstallPackageClicked(sender: AnyObject) {
+        startProgressIndication()
+        setStatus("Removing \(apkToUninstall.appName)...")
+        let handler = ApkHandler(device: self.device)
+        
+        self.moreButton.moveDownForUninstallButton()
+        self.videoButton.moveDownForUninstallButton()
+        self.hideUninstallButton()
+        
+        if let packageName = apkToUninstall.packageName {
+            handler.uninstallPackageWithName(packageName) { () -> Void in
+                self.stopProgressIndication()
+                self.setStatus("\(self.apkToUninstall.appName) removed")
+            }
+            }
+    }
+    
+    
+    func apkHandlerDidFinish() {
+        print("apkHandlerDidFinish")
+    }
+    
+    func apkHandlerDidGetInfo(apk: Apk) {
+        print("apkHandlerDidGetInfo")
+    }
+    
+    func apkHandlerDidStart() {
+        print("apkHandlerDidStart")
+    }
+    
+    func apkHandlerDidUpdate(update: String) {
+        setStatus(update)
+        print("apkHandlerDidUpdate: \(update)")
+    }
+    
+    
+    
+    
 }

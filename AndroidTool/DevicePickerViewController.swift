@@ -15,6 +15,8 @@ class DevicePickerViewController: NSViewController, NSTableViewDelegate, NSTable
 
     var devices : [Device]!
     var apkPath: String!
+    
+    @IBOutlet weak var spinner: NSProgressIndicator!
 
     override init?(nibName nibNameOrNil: String?, bundle nibBundleOrNil: NSBundle?) {
         super.init(nibName: nibNameOrNil, bundle: nibBundleOrNil)
@@ -22,7 +24,11 @@ class DevicePickerViewController: NSViewController, NSTableViewDelegate, NSTable
     }
 
     @IBAction func cancelPressed(sender: AnyObject) {
-        self.dismissController(nil)
+        if #available(OSX 10.10, *) {
+            self.dismissController(nil)
+        } else {
+            // Fallback on earlier versions
+        }
     }
     
     func numberOfRowsInTableView(tableView: NSTableView) -> Int {
@@ -30,27 +36,22 @@ class DevicePickerViewController: NSViewController, NSTableViewDelegate, NSTable
     }
 
     func installApkOnDevice(device:Device){
-        let serial = device.serial!
+        let adbIdentifier = device.adbIdentifier!
         
-        for subview in view.subviews {
-            var s = subview as! NSView
-            s.removeFromSuperview()
-        }
+        spinner.hidden = false
+        spinner.startAnimation(nil)
         
-        var spinner = NSProgressIndicator(frame: view.bounds)
-        spinner.style = NSProgressIndicatorStyle.SpinningStyle
-        spinner.frame.origin.x = view.bounds.maxX/2 - spinner.bounds.size.width/2
-        
-        let args = ["\(serial)",
+        let args = ["\(adbIdentifier)",
                     "\(apkPath)"]
-        
-        //["\(serial) install -r \"\(apkPath)\""]
         
         ShellTasker(scriptFile: "installApkOnDevice").run(arguments: args) { (output) -> Void in
 
             Util().showNotification("App installed on \(device.readableIdentifier())", moreInfo: "\(output)", sound: true)
-            spinner.removeFromSuperview()
-            self.dismissController(nil)
+            if #available(OSX 10.10, *) {
+                self.dismissController(nil)
+            } else {
+                // Fallback on earlier versions
+            }
         }
     }
     
@@ -69,11 +70,15 @@ class DevicePickerViewController: NSViewController, NSTableViewDelegate, NSTable
     
     override func awakeFromNib() {
         deviceTable.reloadData()
-        println("devicescount: \(devices.count)")
+        print("devicescount: \(devices.count)")
     }
     
     override func viewDidLoad() {
-        super.viewDidLoad()
+        if #available(OSX 10.10, *) {
+            super.viewDidLoad()
+        } else {
+            // Fallback on earlier versions
+        }
         // Do view setup here.
     }
     
